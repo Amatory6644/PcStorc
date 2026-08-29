@@ -1,0 +1,36 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  test-and-build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run tests
+        shell: pwsh
+        run: python -m unittest discover -s tests -v
+
+      - name: Install PyInstaller
+        shell: pwsh
+        run: pip install -r requirements-dev.txt
+
+      - name: Build PcStorc.exe
+        shell: pwsh
+        run: pyinstaller --noconfirm --clean PcStorc.spec
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: PcStorc-windows
+          path: dist/PcStorc.exe
