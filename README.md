@@ -4,6 +4,12 @@
 
 Первая версия рассчитана на **одного пользователя и один компьютер**. Сервер и интернет для работы не нужны. Данные хранятся в локальной SQLite-базе.
 
+## Быстрые ссылки
+
+- [Подробная инструкция пользователя на русском](docs/INSTRUCTION_RU.md)
+- [Скачать последнюю Windows-версию](https://github.com/Amatory6644/PcStorc/releases/tag/latest-build)
+- [Скачать PcStorc.exe напрямую](https://github.com/Amatory6644/PcStorc/releases/download/latest-build/PcStorc.exe)
+
 ## Что уже умеет
 
 ### Склад
