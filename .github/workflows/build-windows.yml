@@ -5,12 +5,17 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   test-and-build:
     runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -29,8 +34,30 @@ jobs:
         shell: pwsh
         run: pyinstaller --noconfirm --clean PcStorc.spec
 
-      - name: Upload EXE
+      - name: Prepare downloadable ZIP files
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/PcStorc.exe -DestinationPath PcStorc-windows.zip -Force
+          Compress-Archive -Path main.py,pcstorc,tests,README.md,requirements-dev.txt,PcStorc.spec,build_windows.ps1,run_from_source.bat,register_daily_backup.ps1 -DestinationPath PcStorc-source.zip -Force
+
+      - name: Upload Actions artifact
         uses: actions/upload-artifact@v4
         with:
           name: PcStorc-windows
           path: dist/PcStorc.exe
+
+      - name: Publish files in GitHub Releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f latest-build
+          git push origin latest-build --force
+          gh release view latest-build *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload latest-build dist/PcStorc.exe PcStorc-windows.zip PcStorc-source.zip --clobber
+          } else {
+            gh release create latest-build dist/PcStorc.exe PcStorc-windows.zip PcStorc-source.zip --title "PcStorc — latest Windows build" --notes "Готовая Windows-версия PcStorc. Скачайте PcStorc.exe для запуска, PcStorc-windows.zip для архива с EXE или PcStorc-source.zip для исходного кода."
+          }
