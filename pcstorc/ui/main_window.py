@@ -3,168 +3,263 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from datetime import datetime
-from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from pathlib import Path
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from ..backup import BackupManager
 from ..database import Database
 from ..services import BuildItemInput, BuildService, DEFAULT_CATEGORIES, InventoryService, PcStorcError
 
-STATUS_LABELS = {
-    "DRAFT": "Ğ§ĞµÑ€Ğ½Ğ¾Ğ²Ğ¸Ğº",
-    "RESERVED": "Ğ’ Ñ€ĞµĞ·ĞµÑ€Ğ²Ğµ",
-    "SOLD": "ĞŸÑ€Ğ¾Ğ´Ğ°Ğ½Ğ¾",
-    "CANCELED": "ĞÑ‚Ğ¼ĞµĞ½ĞµĞ½Ğ¾",
-}
-
-STOCK_LABELS = {"GREEN": "Ğ—ĞµĞ»ĞµĞ½Ñ‹Ğ¹", "YELLOW": "Ğ–ĞµĞ»Ñ‚Ñ‹Ğ¹", "RED": "ĞšÑ€Ğ°ÑĞ½Ñ‹Ğ¹"}
+STATUS = {"DRAFT": "Ğ§ĞµÑ€Ğ½Ğ¾Ğ²Ğ¸Ğº", "RESERVED": "Ğ’ Ñ€ĞµĞ·ĞµÑ€Ğ²Ğµ", "SOLD": "ĞŸÑ€Ğ¾Ğ´Ğ°Ğ½Ğ¾", "CANCELED": "ĞÑ‚Ğ¼ĞµĞ½ĞµĞ½Ğ¾"}
+STOCK = {"GREEN": "Ğ—ĞµĞ»ĞµĞ½Ñ‹Ğ¹", "YELLOW": "Ğ–ĞµĞ»Ñ‚Ñ‹Ğ¹", "RED": "ĞšÑ€Ğ°ÑĞ½Ñ‹Ğ¹"}
 
 
-def money(value: float | int | None) -> str:
-    try:
-        return f"{float(value or 0):,.0f} â‚½".replace(",", " ")
-    except (TypeError, ValueError):
-        return "0 â‚½"
+def money(value) -> str:
+    return f"{float(value or 0):,.0f} â‚½".replace(",", " ")
 
 
-def parse_float(text: str, field: str = "Ğ—Ğ½Ğ°Ñ‡ĞµĞ½Ğ¸Ğµ") -> float:
-    text = text.strip().replace(" ", "").replace(",", ".")
-    if not text:
-        return 0.0
-    try:
-        return float(text)
-    except ValueError as exc:
-        raise PcStorcError(f"{field}: Ğ²Ğ²ĞµĞ´Ğ¸Ñ‚Ğµ Ñ‡Ğ¸ÑĞ»Ğ¾") from exc
-
-
-def parse_int(text: str, field: str = "Ğ—Ğ½Ğ°Ñ‡ĞµĞ½Ğ¸Ğµ") -> int:
-    text = text.strip().replace(" ", "")
-    try:
-        return int(text)
-    except ValueError as exc:
-        raise PcStorcError(f"{field}: Ğ²Ğ²ĞµĞ´Ğ¸Ñ‚Ğµ Ñ†ĞµĞ»Ğ¾Ğµ Ñ‡Ğ¸ÑĞ»Ğ¾") from exc
+def number(text: str, integer: bool = False):
+    text = (text or "0").strip().replace(" ", "").replace(",", ".")
+    return int(text) if integer else float(text)
 
 
 class MainWindow:
     def __init__(self, root: tk.Tk, db: Database) -> None:
-        self.root = root
-        self.db = db
+        self.root, self.db = root, db
         self.inventory = InventoryService(db)
         self.builds = BuildService(db, self.inventory)
         self.backups = BackupManager(db)
+        root.title("PcStorc â€” ÑƒÑ‡ĞµÑ‚ ĞºĞ¾Ğ¼Ğ¿Ğ»ĞµĞºÑ‚ÑƒÑÑ‰Ğ¸Ñ…")
+        root.geometry("1280x760")
+        root.minsize(1000, 620)
+        root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self._style()
+        self.tabs = ttk.Notebook(root)
+        self.tabs.pack(fill="both", expand=True, padx=10, pady=10)
+        self.stock_tab, self.build_tab, self.backup_tab = (ttk.Frame(self.tabs, padding=10) for _ in range(3))
+        self.tabs.add(self.stock_tab, text="Ğ¡ĞºĞ»Ğ°Ğ´")
+        self.tabs.add(self.build_tab, text="Ğ¡Ğ±Ğ¾Ñ€ĞºĞ¸ Ğ¸ Ğ¿Ñ€Ğ¾Ğ´Ğ°Ğ¶Ğ¸")
+        self.tabs.add(self.backup_tab, text="Ğ ĞµĞ·ĞµÑ€Ğ²Ğ½Ñ‹Ğµ ĞºĞ¾Ğ¿Ğ¸Ğ¸")
+        self._stock_ui(); self._build_ui(); self._backup_ui(); self.refresh()
+        root.after(60_000, self._daily_check)
 
-        self.root.title("PcStorc â€” ÑƒÑ‡ĞµÑ‚ ĞºĞ¾Ğ¼Ğ¿Ğ»ĞµĞºÑ‚ÑƒÑÑ‰Ğ¸Ñ…")
-        self.root.geometry("1420x860")
-        self.root.minsize(1120, 700)
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+    def _style(self):
+        s = ttk.Style()
+        try: s.theme_use("vista" if os.name == "nt" else "clam")
+        except tk.TclError: pass
+        s.configure("Treeview", rowheight=28)
+        s.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"))
+        s.configure("Title.TLabel", font=("Segoe UI", 16, "bold"))
 
-        self._configure_style()
-        self._build_ui()
-        self.refresh_all()
-        self._schedule_backup_check()
+    def _stock_ui(self):
+        bar = ttk.Frame(self.stock_tab); bar.pack(fill="x", pady=(0, 8))
+        ttk.Label(bar, text="Ğ¡ĞºĞ»Ğ°Ğ´", style="Title.TLabel").pack(side="left")
+        for text, cmd in [("+ ĞŸĞ¾Ğ·Ğ¸Ñ†Ğ¸Ñ", self.add_component), ("ĞŸÑ€Ğ¸Ñ…Ğ¾Ğ´", self.receive), ("ĞšĞ¾Ñ€Ñ€ĞµĞºÑ‚Ğ¸Ñ€Ğ¾Ğ²Ğ°Ñ‚ÑŒ Ğ¾ÑÑ‚Ğ°Ñ‚Ğ¾Ğº", self.adjust)]:
+            ttk.Button(bar, text=text, command=cmd).pack(side="right", padx=3)
+        cols = ("cat", "model", "qty", "reserved", "free", "status", "price", "supplier", "days", "need")
+        self.stock_tree = ttk.Treeview(self.stock_tab, columns=cols, show="headings")
+        specs = [("cat","ĞšĞ°Ñ‚ĞµĞ³Ğ¾Ñ€Ğ¸Ñ",150),("model","ĞœĞ¾Ğ´ĞµĞ»ÑŒ",280),("qty","ĞĞ°Ğ»Ğ¸Ñ‡Ğ¸Ğµ",70),("reserved","Ğ ĞµĞ·ĞµÑ€Ğ²",70),
+                 ("free","Ğ¡Ğ²Ğ¾Ğ±Ğ¾Ğ´Ğ½Ğ¾",75),("status","Ğ£Ñ€Ğ¾Ğ²ĞµĞ½ÑŒ",85),("price","Ğ—Ğ°ĞºÑƒĞ¿ĞºĞ°",100),("supplier","ĞŸĞ¾ÑÑ‚Ğ°Ğ²Ñ‰Ğ¸Ğº",130),
+                 ("days","Ğ”Ğ¾ÑÑ‚Ğ°Ğ²ĞºĞ°",75),("need","Ğ ĞµĞºĞ¾Ğ¼ĞµĞ½Ğ´Ğ°Ñ†Ğ¸Ñ",135)]
+        for c,t,w in specs: self.stock_tree.heading(c,text=t); self.stock_tree.column(c,width=w,anchor="center" if c not in {"cat","model","supplier","need"} else "w")
+        self.stock_tree.tag_configure("RED", background="#ffdada"); self.stock_tree.tag_configure("YELLOW", background="#fff1bd")
+        self.stock_tree.pack(fill="both", expand=True)
 
-    def _configure_style(self) -> None:
-        style = ttk.Style()
+    def _build_ui(self):
+        bar = ttk.Frame(self.build_tab); bar.pack(fill="x", pady=(0,8))
+        ttk.Label(bar, text="Ğ¡Ğ±Ğ¾Ñ€ĞºĞ¸", style="Title.TLabel").pack(side="left")
+        for text, cmd in [("ĞĞ¾Ğ²Ğ°Ñ ÑĞ±Ğ¾Ñ€ĞºĞ°", self.new_build), ("Ğ‘Ñ‹ÑÑ‚Ñ€Ñ‹Ğ¹ ĞºĞ¾Ğ½Ñ„Ğ¸Ğ³", self.quick_build), ("ĞŸÑ€Ğ¾Ğ´Ğ°Ñ‚ÑŒ", self.sell), ("ĞÑ‚Ğ¼ĞµĞ½Ğ¸Ñ‚ÑŒ", self.cancel_build)]:
+            ttk.Button(bar, text=text, command=cmd).pack(side="right", padx=3)
+        cols=("code","status","customer","cost","sale","profit","date")
+        self.build_tree=ttk.Treeview(self.build_tab,columns=cols,show="headings")
+        specs=[("code","ĞšĞ¾Ğ´",150),("status","Ğ¡Ñ‚Ğ°Ñ‚ÑƒÑ",100),("customer","ĞšĞ»Ğ¸ĞµĞ½Ñ‚",180),("cost","Ğ¡ĞµĞ±ĞµÑÑ‚Ğ¾Ğ¸Ğ¼Ğ¾ÑÑ‚ÑŒ",120),("sale","ĞŸÑ€Ğ¾Ğ´Ğ°Ğ¶Ğ°",120),("profit","ĞŸÑ€Ğ¸Ğ±Ñ‹Ğ»ÑŒ",120),("date","Ğ¡Ğ¾Ğ·Ğ´Ğ°Ğ½Ğ¾",160)]
+        for c,t,w in specs: self.build_tree.heading(c,text=t); self.build_tree.column(c,width=w,anchor="center" if c not in {"customer"} else "w")
+        self.build_tree.pack(fill="both",expand=True); self.build_tree.bind("<Double-1>", lambda _e:self.show_build())
+
+    def _backup_ui(self):
+        ttk.Label(self.backup_tab,text="Ğ ĞµĞ·ĞµÑ€Ğ²Ğ½Ñ‹Ğµ ĞºĞ¾Ğ¿Ğ¸Ğ¸",style="Title.TLabel").pack(anchor="w")
+        f=ttk.LabelFrame(self.backup_tab,text="ĞĞ°ÑÑ‚Ñ€Ğ¾Ğ¹ĞºĞ¸",padding=12); f.pack(fill="x",pady=10)
+        self.backup_folder=tk.StringVar(value=self.db.get_setting("backup_folder",str(self.db.default_backup_dir())))
+        self.backup_time=tk.StringVar(value=self.db.get_setting("backup_time","21:00"))
+        ttk.Label(f,text="ĞŸĞ°Ğ¿ĞºĞ°:").grid(row=0,column=0,sticky="w"); ttk.Entry(f,textvariable=self.backup_folder,width=80).grid(row=0,column=1,sticky="ew",padx=8)
+        ttk.Button(f,text="Ğ’Ñ‹Ğ±Ñ€Ğ°Ñ‚ÑŒ",command=self.choose_backup_folder).grid(row=0,column=2)
+        ttk.Label(f,text="Ğ•Ğ¶ĞµĞ´Ğ½ĞµĞ²Ğ½Ğ¾:").grid(row=1,column=0,sticky="w",pady=8); ttk.Entry(f,textvariable=self.backup_time,width=10).grid(row=1,column=1,sticky="w",padx=8)
+        f.columnconfigure(1,weight=1)
+        buttons=ttk.Frame(self.backup_tab); buttons.pack(fill="x")
+        ttk.Button(buttons,text="Ğ¡Ğ¾Ñ…Ñ€Ğ°Ğ½Ğ¸Ñ‚ÑŒ Ğ½Ğ°ÑÑ‚Ñ€Ğ¾Ğ¹ĞºĞ¸",command=self.save_backup_settings).pack(side="left")
+        ttk.Button(buttons,text="Ğ¡Ğ¾Ğ·Ğ´Ğ°Ñ‚ÑŒ ĞºĞ¾Ğ¿Ğ¸Ñ ÑĞµĞ¹Ñ‡Ğ°Ñ",command=self.manual_backup).pack(side="left",padx=5)
+        ttk.Button(buttons,text="Ğ’Ğ¾ÑÑÑ‚Ğ°Ğ½Ğ¾Ğ²Ğ¸Ñ‚ÑŒ Ğ¸Ğ· ZIP",command=self.restore_backup).pack(side="left",padx=5)
+        ttk.Button(buttons,text="Ğ£ÑÑ‚Ğ°Ğ½Ğ¾Ğ²Ğ¸Ñ‚ÑŒ Ğ·Ğ°Ğ´Ğ°Ñ‡Ñƒ Windows",command=self.install_task).pack(side="left",padx=5)
+        self.backup_info=ttk.Label(self.backup_tab,text=""); self.backup_info.pack(anchor="w",pady=18)
+
+    def refresh(self):
+        self.refresh_stock(); self.refresh_builds(); self.refresh_backup()
+
+    def refresh_stock(self):
+        self.stock_tree.delete(*self.stock_tree.get_children())
+        for x in self.inventory.list_components():
+            self.stock_tree.insert("","end",iid=str(x["id"]),tags=(x["stock_status"],),values=(x["category"],x["model"],x["quantity"],x["reserved"],x["available"],STOCK[x["stock_status"]],money(x["last_purchase_price"]),x["supplier"],x["delivery_days"],x["urgency"]))
+
+    def refresh_builds(self):
+        self.build_tree.delete(*self.build_tree.get_children())
+        for b in self.builds.list_builds():
+            self.build_tree.insert("","end",iid=str(b["id"]),values=(b["code"],STATUS.get(b["status"],b["status"]),b["customer"],money(b["cost_total"]),money(b["sale_price"]),money(b["profit"]),b["created_at"]))
+
+    def refresh_backup(self):
+        p=self.backups.latest_backup()
+        self.backup_info.config(text=f"ĞŸĞ¾ÑĞ»ĞµĞ´Ğ½ÑÑ ĞºĞ¾Ğ¿Ğ¸Ñ: {p.name if p else 'ĞµÑ‰Ğµ Ğ½Ğµ ÑĞ¾Ğ·Ğ´Ğ°Ğ½Ğ°'}\nĞŸĞ°Ğ¿ĞºĞ°: {self.backups.backup_folder()}")
+
+    def selected_component(self):
+        s=self.stock_tree.selection()
+        if not s: raise PcStorcError("Ğ’Ñ‹Ğ±ĞµÑ€Ğ¸Ñ‚Ğµ Ğ¿Ğ¾Ğ·Ğ¸Ñ†Ğ¸Ñ Ğ½Ğ° ÑĞºĞ»Ğ°Ğ´Ğµ")
+        return self.inventory.get_component(int(s[0]))
+
+    def selected_build(self):
+        s=self.build_tree.selection()
+        if not s: raise PcStorcError("Ğ’Ñ‹Ğ±ĞµÑ€Ğ¸Ñ‚Ğµ ÑĞ±Ğ¾Ñ€ĞºÑƒ")
+        return self.builds.get_build(int(s[0]))
+
+    def add_component(self):
+        d=ComponentDialog(self.root)
+        if not d.result: return
         try:
-            style.theme_use("vista" if os.name == "nt" else "clam")
-        except tk.TclError:
-            pass
-        style.configure("Title.TLabel", font=("Segoe UI", 18, "bold"))
-        style.configure("CardTitle.TLabel", font=("Segoe UI", 11, "bold"))
-        style.configure("Metric.TLabel", font=("Segoe UI", 22, "bold"))
-        style.configure("Treeview", rowheight=28, font=("Segoe UI", 10))
-        style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"))
-        style.configure("TButton", padding=(10, 6))
+            self.inventory.add_component(**d.result); self.refresh()
+        except Exception as e: messagebox.showerror("PcStorc",str(e))
 
-    def _build_ui(self) -> None:
-        header = ttk.Frame(self.root, padding=(16, 12))
-        header.pack(fill="x")
-        ttk.Label(header, text="PcStorc", style="Title.TLabel").pack(side="left")
-        ttk.Label(header, text="  Ğ¡ĞºĞ»Ğ°Ğ´ â€¢ Ñ€ĞµĞ·ĞµÑ€Ğ²Ñ‹ â€¢ ÑĞ±Ğ¾Ñ€ĞºĞ¸ â€¢ Ğ¿Ñ€Ğ¾Ğ´Ğ°Ğ¶Ğ¸", foreground="#666").pack(side="left", pady=(7, 0))
-        self.header_status = ttk.Label(header, text="")
-        self.header_status.pack(side="right", pady=(7, 0))
+    def receive(self):
+        try: c=self.selected_component()
+        except PcStorcError as e: return messagebox.showerror("PcStorc",str(e))
+        qty=simpledialog.askinteger("ĞŸÑ€Ğ¸Ñ…Ğ¾Ğ´",f"{c['model']}\nĞšĞ¾Ğ»Ğ¸Ñ‡ĞµÑÑ‚Ğ²Ğ¾:",minvalue=1,parent=self.root)
+        if qty is None:return
+        price=simpledialog.askfloat("ĞŸÑ€Ğ¸Ñ…Ğ¾Ğ´","Ğ¦ĞµĞ½Ğ° Ğ·Ğ°ĞºÑƒĞ¿ĞºĞ¸ Ğ·Ğ° ÑˆÑ‚ÑƒĞºÑƒ:",initialvalue=c["last_purchase_price"],minvalue=0,parent=self.root)
+        if price is None:return
+        supplier=simpledialog.askstring("ĞŸÑ€Ğ¸Ñ…Ğ¾Ğ´","ĞŸĞ¾ÑÑ‚Ğ°Ğ²Ñ‰Ğ¸Ğº:",initialvalue=c["supplier"],parent=self.root) or ""
+        self.inventory.receive_stock(c["id"],qty,price,supplier); self.refresh()
 
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+    def adjust(self):
+        try:c=self.selected_component()
+        except PcStorcError as e:return messagebox.showerror("PcStorc",str(e))
+        qty=simpledialog.askinteger("ĞÑÑ‚Ğ°Ñ‚Ğ¾Ğº",f"ĞĞ¾Ğ²Ñ‹Ğ¹ Ñ„Ğ¸Ğ·Ğ¸Ñ‡ĞµÑĞºĞ¸Ğ¹ Ğ¾ÑÑ‚Ğ°Ñ‚Ğ¾Ğº {c['model']}:",initialvalue=c["quantity"],minvalue=0,parent=self.root)
+        if qty is None:return
+        try:self.inventory.adjust_stock(c["id"],qty,"Ğ˜Ğ½Ğ²ĞµĞ½Ñ‚Ğ°Ñ€Ğ¸Ğ·Ğ°Ñ†Ğ¸Ñ"); self.refresh()
+        except PcStorcError as e:messagebox.showerror("PcStorc",str(e))
 
-        self.dashboard_tab = ttk.Frame(self.notebook, padding=12)
-        self.inventory_tab = ttk.Frame(self.notebook, padding=12)
-        self.builds_tab = ttk.Frame(self.notebook, padding=12)
-        self.movements_tab = ttk.Frame(self.notebook, padding=12)
-        self.backup_tab = ttk.Frame(self.notebook, padding=12)
+    def new_build(self):
+        BuildDialog(self.root,self.inventory,self.builds,self.refresh)
 
-        self.notebook.add(self.dashboard_tab, text="ĞĞ±Ğ·Ğ¾Ñ€")
-        self.notebook.add(self.inventory_tab, text="Ğ¡ĞºĞ»Ğ°Ğ´")
-        self.notebook.add(self.builds_tab, text="Ğ¡Ğ±Ğ¾Ñ€ĞºĞ¸ Ğ¸ Ğ¿Ñ€Ğ¾Ğ´Ğ°Ğ¶Ğ¸")
-        self.notebook.add(self.movements_tab, text="Ğ”Ğ²Ğ¸Ğ¶ĞµĞ½Ğ¸Ñ")
-        self.notebook.add(self.backup_tab, text="Ğ ĞµĞ·ĞµÑ€Ğ²Ğ½Ñ‹Ğµ ĞºĞ¾Ğ¿Ğ¸Ğ¸")
+    def quick_build(self):
+        text=simpledialog.askstring("Ğ‘Ñ‹ÑÑ‚Ñ€Ñ‹Ğ¹ ĞºĞ¾Ğ½Ñ„Ğ¸Ğ³","Ğ’ÑÑ‚Ğ°Ğ²ÑŒÑ‚Ğµ ĞºĞ¾Ğ¼Ğ¿Ğ»ĞµĞºÑ‚ÑƒÑÑ‰Ğ¸Ğµ Ñ‡ĞµÑ€ĞµĞ· Ğ¿ĞµÑ€ĞµĞ½Ğ¾Ñ ÑÑ‚Ñ€Ğ¾ĞºĞ¸:",parent=self.root)
+        if not text:return
+        matched,unmatched,details=self.builds.quick_match_config(text)
+        if not matched:return messagebox.showwarning("PcStorc","ĞĞµ ÑƒĞ´Ğ°Ğ»Ğ¾ÑÑŒ ÑĞ¾Ğ¿Ğ¾ÑÑ‚Ğ°Ğ²Ğ¸Ñ‚ÑŒ Ğ¿Ğ¾Ğ·Ğ¸Ñ†Ğ¸Ğ¸ ÑĞ¾ ÑĞºĞ»Ğ°Ğ´Ğ¾Ğ¼")
+        msg="\n".join(f"âœ“ {d['line']} â†’ {d['component']['model']}" for d in details)
+        if unmatched:msg += "\n\nĞĞµ Ğ½Ğ°Ğ¹Ğ´ĞµĞ½Ğ¾:\n"+"\n".join(unmatched)
+        if messagebox.askyesno("PcStorc",msg+"\n\nĞ¡Ğ¾Ğ·Ğ´Ğ°Ñ‚ÑŒ Ñ€ĞµĞ·ĞµÑ€Ğ²?"):
+            try:self.builds.create_build(matched,description="Ğ‘Ñ‹ÑÑ‚Ñ€Ñ‹Ğ¹ Ğ²Ğ²Ğ¾Ğ´",status="RESERVED"); self.refresh()
+            except PcStorcError as e:messagebox.showerror("PcStorc",str(e))
 
-        self._build_dashboard_tab()
-        self._build_inventory_tab()
-        self._build_builds_tab()
-        self._build_movements_tab()
-        self._build_backup_tab()
+    def sell(self):
+        try:b=self.selected_build()
+        except PcStorcError as e:return messagebox.showerror("PcStorc",str(e))
+        price=simpledialog.askfloat("ĞŸÑ€Ğ¾Ğ´Ğ°Ğ¶Ğ°",f"Ğ¡ĞµĞ±ĞµÑÑ‚Ğ¾Ğ¸Ğ¼Ğ¾ÑÑ‚ÑŒ: {money(b['cost_total'])}\nĞ¦ĞµĞ½Ğ° Ğ¿Ñ€Ğ¾Ğ´Ğ°Ğ¶Ğ¸:",initialvalue=b["sale_price"] or b["cost_total"],minvalue=0,parent=self.root)
+        if price is None:return
+        try:self.builds.sell_build(b["id"],price); messagebox.showinfo("PcStorc",f"ĞŸÑ€Ğ¾Ğ´Ğ°Ğ½Ğ¾. ĞŸÑ€Ğ¸Ğ±Ñ‹Ğ»ÑŒ: {money(price-b['cost_total'])}"); self.refresh()
+        except PcStorcError as e:messagebox.showerror("PcStorc",str(e))
 
-    # ---------- Dashboard ----------
-    def _build_dashboard_tab(self) -> None:
-        metrics = ttk.Frame(self.dashboard_tab)
-        metrics.pack(fill="x", pady=(0, 12))
-        self.metric_labels: dict[str, ttk.Label] = {}
-        for key, title in [
-            ("positions", "ĞŸĞ¾Ğ·Ğ¸Ñ†Ğ¸Ğ¹ Ğ½Ğ° ÑĞºĞ»Ğ°Ğ´Ğµ"),
-            ("reserved", "Ğ’ Ñ€ĞµĞ·ĞµÑ€Ğ²Ğµ, ÑˆÑ‚."),
-            ("red", "ĞšÑ€Ğ°ÑĞ½Ğ°Ñ Ğ·Ğ¾Ğ½Ğ°"),
-            ("sales", "ĞŸÑ€Ğ¾Ğ´Ğ°Ğ¶"),
-            ("profit", "ĞŸÑ€Ğ¸Ğ±Ñ‹Ğ»ÑŒ Ğ²ÑĞµĞ³Ğ¾"),
-        ]:
-            card = ttk.LabelFrame(metrics, text=title, padding=14)
-            card.pack(side="left", fill="both", expand=True, padx=(0, 8))
-            label = ttk.Label(card, text="0", style="Metric.TLabel")
-            label.pack(anchor="w")
-            self.metric_labels[key] = label
+    def cancel_build(self):
+        try:b=self.selected_build(); self.builds.cancel_build(b["id"]); self.refresh()
+        except PcStorcError as e:messagebox.showerror("PcStorc",str(e))
 
-        ttk.Label(self.dashboard_tab, text="Ğ§Ñ‚Ğ¾ Ğ½ÑƒĞ¶Ğ½Ğ¾ ĞºĞ¾Ğ½Ñ‚Ñ€Ğ¾Ğ»Ğ¸Ñ€Ğ¾Ğ²Ğ°Ñ‚ÑŒ", style="CardTitle.TLabel").pack(anchor="w", pady=(4, 6))
-        columns = ("status", "category", "model", "available", "delivery", "supplier", "action")
-        self.alert_tree = ttk.Treeview(self.dashboard_tab, columns=columns, show="headings", height=17)
-        for col, text, width in [
-            ("status", "Ğ£Ñ€Ğ¾Ğ²ĞµĞ½ÑŒ", 95),
-            ("category", "ĞšĞ°Ñ‚ĞµĞ³Ğ¾Ñ€Ğ¸Ñ", 170),
-            ("model", "ĞœĞ¾Ğ´ĞµĞ»ÑŒ", 350),
-            ("available", "Ğ”Ğ¾ÑÑ‚ÑƒĞ¿Ğ½Ğ¾", 90),
-            ("delivery", "Ğ”Ğ¾ÑÑ‚Ğ°Ğ²ĞºĞ°", 90),
-            ("supplier", "ĞŸĞ¾ÑÑ‚Ğ°Ğ²Ñ‰Ğ¸Ğº", 160),
-            ("action", "Ğ ĞµĞºĞ¾Ğ¼ĞµĞ½Ğ´Ğ°Ñ†Ğ¸Ñ", 160),
-        ]:
-            self.alert_tree.heading(col, text=text)
-            self.alert_tree.column(col, width=width, anchor="center" if col in {"status", "available", "delivery"} else "w")
-        self.alert_tree.tag_configure("RED", background="#ffd9d9")
-        self.alert_tree.tag_configure("YELLOW", background="#fff2bf")
-        self.alert_tree.pack(fill="both", expand=True)
+    def show_build(self):
+        try:b=self.selected_build()
+        except PcStorcError:return
+        lines=[f"{b['code']} â€” {STATUS.get(b['status'],b['status'])}",f"ĞšĞ»Ğ¸ĞµĞ½Ñ‚: {b['customer'] or 'â€”'}",""]
+        lines += [f"{i['category_snapshot']}: {i['component_name_snapshot']} Ã—{i['quantity']} â€” {money(i['quantity']*i['unit_cost'])}" for i in b["items"]]
+        lines += ["",f"Ğ¡ĞµĞ±ĞµÑÑ‚Ğ¾Ğ¸Ğ¼Ğ¾ÑÑ‚ÑŒ: {money(b['cost_total'])}",f"ĞŸÑ€Ğ¾Ğ´Ğ°Ğ¶Ğ°: {money(b['sale_price'])}",f"ĞŸÑ€Ğ¸Ğ±Ñ‹Ğ»ÑŒ: {money(b['profit'])}"]
+        messagebox.showinfo("PcStorc","\n".join(lines))
 
-    # ---------- Inventory ----------
-    def _build_inventory_tab(self) -> None:
-        bar = ttk.Frame(self.inventory_tab)
-        bar.pack(fill="x", pady=(0, 8))
-        ttk.Button(bar, text="+ ĞĞ¾Ğ²Ğ°Ñ Ğ¿Ğ¾Ğ·Ğ¸Ñ†Ğ¸Ñ", command=self.add_component).pack(side="left")
-        ttk.Button(bar, text="ĞŸÑ€Ğ¸Ñ…Ğ¾Ğ´", command=self.receive_stock).pack(side="left", padx=4)
-        ttk.Button(bar, text="Ğ ĞµĞ´Ğ°ĞºÑ‚Ğ¸Ñ€Ğ¾Ğ²Ğ°Ñ‚ÑŒ", command=self.edit_component).pack(side="left", padx=4)
-        ttk.Button(bar, text="ĞšĞ¾Ñ€Ñ€ĞµĞºÑ‚Ğ¸Ñ€Ğ¾Ğ²Ğ°Ñ‚ÑŒ Ğ¾ÑÑ‚Ğ°Ñ‚Ğ¾Ğº", command=self.adjust_stock).pack(side="left", padx=4)
-        ttk.Button(bar, text="ĞĞ±Ğ½Ğ¾Ğ²Ğ¸Ñ‚ÑŒ", command=self.refresh_all).pack(side="left", padx=4)
-        ttk.Label(bar, text="ĞŸĞ¾Ğ¸ÑĞº:").pack(side="left", padx=(18, 4))
-        self.inventory_search = tk.StringVar()
-        search = ttk.Entry(bar, textvariable=self.inventory_search, width=35)
-        search.pack(side="left")
-        self.inventory_search.trace_add("write", lambda *_: self.refresh_inventory())
+    def choose_backup_folder(self):
+        p=filedialog.askdirectory(parent=self.root)
+        if p:self.backup_folder.set(p)
 
-        columns = (
-            "category", "model", "quantity", "reserved", "available", "status",
-            "price", "supplier", "delivery", "thresholds", "urgency",
-        )
-        self.inventory_tree = ttk.Treeview(self.inventory_tab, columns=columns, show="headings")
-        settings = [
-            ("category", "ĞšĞ°Ñ‚ĞµĞ³Ğ¾Ñ€Ğ¸Ñ", 170),
-            ("model", "ĞœĞ¾Ğ´ĞµĞ»ÑŒ", 310),
-            ("quantity", "ĞĞ°Ğ»Ğ¸Ñ‡Ğ¸Ğµ", 75),
-            ("reserved", "Ğ ĞµĞ·ĞµÑ€Ğ²", ²È="25½¹•¹Ñ}‰½à€ôÑÑ¬¹½µ‰½‰½à¡˜°Ñ•áÑÙ…É¥…‰±”õÍ•±˜¹½µÁ½¹•¹Ğ°ÍÑ…Ñ”ô‰É•…‘½¹±äˆ°İ¥‘Ñ ôØÀ¤ìÍ•±˜¹½µÁ½¹•¹Ñ}‰½à¹É¥¡É½ÜôÄ°½±Õµ¸ôÄ°Á…‘àôà°Á…‘äôĞ¤(€€€€€€€Í•±˜¹½µÁ½¹•¹Ñ}‰½à¹‰¥¹ ˆğñ½µ‰½‰½áM•±•Ñ•øøˆ°±…µ‰‘„}”èÍ•±˜¹}±½…‘}ÁÉ¥” ¤¤(€€€€€€€ÑÑ¬¹1…‰•°¡˜°Ñ•áĞô‹BkBûBïBãFB×FFBËBøˆ¤¹É¥¡É½ÜôÈ°½±Õµ¸ôÀ°ÍÑ¥­äô‰Üˆ°Á…‘äôĞ¤ìÑÑ¬¹¹ÑÉä¡˜°Ñ•áÑÙ…É¥…‰±”õÍ•±˜¹ÅÑä¤¹É¥¡É½ÜôÈ°½±Õµ¸ôÄ°ÍÑ¥­äô‰Üˆ°Á…‘àôà°Á…‘äôĞ¤(€€€€€€€ÑÑ¬¹1…‰•°¡˜°Ñ•áĞô‹B‡B×BÇB×FFBûBãBóBûFFF0ƒBßBÀƒF#F¸ˆ¤¹É¥¡É½ÜôÌ°½±Õµ¸ôÀ°ÍÑ¥­äô‰Üˆ°Á…‘äôĞ¤ìÑÑ¬¹¹ÑÉä¡˜°Ñ•áÑÙ…É¥…‰±”õÍ•±˜¹½ÍĞ¤¹É¥¡É½ÜôÌ°½±Õµ¸ôÄ°ÍÑ¥­äô‰Üˆ°Á…‘àôà°Á…‘äôĞ¤(€€€€€€€Í•±˜¹ÍÑ½­}±…‰•°€ôÑÑ¬¹1…‰•°¡˜°Ñ•áĞôˆˆ°™½É•É½Õ¹ôˆŒØØØˆ¤ìÍ•±˜¹ÍÑ½­}±…‰•°¹É¥¡É½ÜôĞ°½±Õµ¸ôÀ°½±Õµ¹ÍÁ…¸ôÈ°ÍÑ¥­äô‰Üˆ°Á…‘äôĞ¤(€€€€€€€ÑÑ¬¹	ÕÑÑ½¸¡˜°Ñ•áĞô‹BSBûBÇBÃBËBãFF0ˆ°½µµ…¹õÍ•±˜¹…‘¤¹É¥¡É½ÜôÔ°½±Õµ¸ôÀ°½±Õµ¹ÍÁ…¸ôÈ°Á…‘äôà¤(€€€€€€€Í•±˜¹}±½…‘}½µÁ½¹•¹ÑÌ ¤((€€€‘•˜}™¥±Ñ•É•¡Í•±˜¤€´ø±¥ÍÑm‘¥Ñtè(€€€€€€€É•ÑÕÉ¸mŒ™½ÈŒ¥¸Í•±˜¹½µÁ½¹•¹ÑÌ¥˜l‰…Ñ•½Éä‰t€ôôÍ•±˜¹…Ñ•½Éä¹•Ğ ¥t((€€€‘•˜}±½…‘}½µÁ½¹•¹ÑÌ¡Í•±˜¤€´ø9½¹”è(€€€€€€€¥Ñ•µÌ€ôÍ•±˜¹}™¥±Ñ•É• ¤(€€€€€€€Ù…±Õ•Ì€ôml‰µ½‘•°‰t™½ÈŒ¥¸¥Ñ•µÍt(€€€€€€€Í•±˜¹½µÁ½¹•¹Ñ}‰½ál‰Ù…±Õ•Ì‰t€ôÙ…±Õ•Ì(€€€€€€€¥˜Ù…±Õ•Ìè(€€€€€€€€€€€Í•±˜¹½µÁ½¹•¹Ğ¹Í•Ğ¡Ù…±Õ•ÍlÁt¤ìÍ•±˜¹}±½…‘}ÁÉ¥” ¤(€€€€€€€•±Í”è(€€€€€€€€€€€Í•±˜¹½µÁ½¹•¹Ğ¹Í•Ğ ˆˆ¤((€€€‘•˜}Í•±•Ñ•¡Í•±˜¤€´ø‘¥Ğğ9½¹”è(€€€€€€€É•ÑÕÉ¸¹•áĞ ¡Œ™½ÈŒ¥¸Í•±˜¹}™¥±Ñ•É• ¤¥˜l‰µ½‘•°‰t€ôôÍ•±˜¹½µÁ½¹•¹Ğ¹•Ğ ¤¤°9½¹”¤((€€€‘•˜}±½…‘}ÁÉ¥”¡Í•±˜¤€´ø9½¹”è(€€€€€€€Œ€ôÍ•±˜¹}Í•±•Ñ• ¤(€€€€€€€¥˜Œè(€€€€€€€€€€€Í•±˜¹½ÍĞ¹Í•Ğ¡ÍÑÈ¡l‰±…ÍÑ}ÁÕÉ¡…Í•}ÁÉ¥”‰t¤¤(€€€€€€€€€€€Í•±˜¹ÍÑ½­}±…‰•°¹½¹™¥ÕÉ”¡Ñ•áĞõ˜‹B‡BËBûBÇBûBÓB÷BøƒFB×BçFBÃFèíl…Ù…¥±…‰±”uôƒF#F¸€£BÈƒB÷BÃBïBãFBãBàílÅÕ…¹Ñ¥Ñäuô°ƒBÈƒFB×BßB×FBËBÔílÉ•Í•ÉÙ•uô¤ˆ¤((€€€‘•˜…‘¡Í•±˜¤€´ø9½¹”è(€€€€€€€ÑÉäè(€€€€€€€€€€€Œ€ôÍ•±˜¹}Í•±•Ñ• ¤(€€€€€€€€€€€¥˜¹½ĞŒèÉ…¥Í”AMÑ½ÉÉÉ½È ‹BKF/BÇB×FBãFBÔƒBëBûBóBÿBïB×BëFFF;F'FF8ˆ¤(€€€€€€€€€€€ÅÑä€ôÁ…ÉÍ•}¥¹Ğ¡Í•±˜¹ÅÑä¹•Ğ ¤°€‹BkBûBïBãFB×FFBËBøˆ¤ì½ÍĞ€ôÁ…ÉÍ•}™±½…Ğ¡Í•±˜¹½ÍĞ¹•Ğ ¤°€‹B‡B×BÇB×FFBûBãBóBûFFF0ˆ¤(€€€€€€€€€€€¥˜ÅÑä€ğô€ÀèÉ…¥Í”AMÑ½ÉÉÉ½È ‹BkBûBïBãFB×FFBËBøƒBÓBûBïBÛB÷BøƒBÇF/FF0ƒBÇBûBïF3F#BÔƒB÷FBïF<ˆ¤(€€€€€€€€€€€Í•±˜¹½¹}…‘¡	Õ¥±‘%Ñ•µ%¹ÁÕĞ¡l‰¥‰t°ÅÑä°½ÍĞ¤¤ìÍ•±˜¹‘•ÍÑÉ½ä ¤(€€€€€€€•á•ÁĞAMÑ½ÉÉÉ½È…Ì•áŒè(€€€€€€€€€€€µ•ÍÍ…•‰½à¹Í¡½İ•ÉÉ½È ‰AMÑ½ÉŒˆ°ÍÑÈ¡•áŒ¤°Á…É•¹ĞõÍ•±˜¤(()±…ÍÌEÕ¥­½¹™¥¥…±½œ¡Ñ¬¹Q½Á±•Ù•°¤è(€€€‘•˜}}¥¹¥Ñ}|¡Í•±˜°Á…É•¹Ğ°‰Õ¥±‘Ìè	Õ¥±‘M•ÉÙ¥”°½¹}…•ÁĞ¤€´ø9½¹”è(€€€€€€€ÍÕÁ•È ¤¹}}¥¹¥Ñ}|¡Á…É•¹Ğ¤(€€€€€€€Í•±˜¹‰Õ¥±‘Ì°Í•±˜¹½¹}…•ÁĞ€ô‰Õ¥±‘Ì°½¹}…•ÁĞ(€€€€€€€Í•±˜¹µ…Ñ¡•Ìè±¥ÍÑm	Õ¥±‘%Ñ•µ%¹ÁÕÑt€ômt(€€€€€€€Í•±˜¹Ñ¥Ñ±” ‹BGF/FFFF/BäƒBËBËBûBĞƒBëBûB÷FBãBÏFFBÃFBãBàˆ¤(€€€€€€€Í•±˜¹•½µ•ÑÉä ˆÜØÁàØÀÀˆ¤(€€€€€€€Í•±˜¹ÑÉ…¹Í¥•¹Ğ¡Á…É•¹Ğ¤ìÍ•±˜¹É…‰}Í•Ğ ¤(€€€€€€€˜€ôÑÑ¬¹É…µ”¡Í•±˜°Á…‘‘¥¹œôÄÈ¤ì˜¹Á…¬¡™¥±°ô‰‰½Ñ ˆ°•áÁ…¹õQÉÕ”¤(€€€€€€€ÑÑ¬¹1…‰•°¡˜°Ñ•áĞô‹BKFFBÃBËF3FBÔƒBëBûB÷FBãBÏFFBÃFBãF8ƒŠPƒBÿBøƒBûBÓB÷BûBäƒBëBûBóBÿBïB×BëFFF;F'B×BäƒBÈƒFFFBûBëBÔ¸AMÑ½ÉŒƒBÿBûBÿF/FBÃB×FFF<ƒFBûBÿBûFFBÃBËBãFF0ƒB×BÔƒFƒBóBûBÓB×BïF?BóBàƒB÷BÀƒFBëBïBÃBÓBÔ¸ˆ°İÉ…Á±•¹Ñ ôÜÀÀ¤¹Á…¬¡…¹¡½Èô‰Üˆ¤(€€€€€€€Í•±˜¹Ñ•áĞ€ôÑ¬¹Q•áĞ¡˜°¡•¥¡ĞôÄĞ°İÉ…Àô‰İ½Éˆ¤ìÍ•±˜¹Ñ•áĞ¹Á…¬¡™¥±°ô‰‰½Ñ ˆ°•áÁ…¹õQÉÕ”°Á…‘äôà¤(€€€€€€€ÑÑ¬¹	ÕÑÑ½¸¡˜°Ñ•áĞô‹BƒBÃFBÿBûBßB÷BÃFF0ˆ°½µµ…¹õÍ•±˜¹µ…Ñ ¤¹Á…¬¡…¹¡½Èô‰Üˆ¤(€€€€€€€Í•±˜¹É•ÍÕ±Ğ€ôÑ¬¹Q•áĞ¡˜°¡•¥¡ĞôÄÀ°İÉ…Àô‰İ½Éˆ°ÍÑ…Ñ”ô‰‘¥Í…‰±•ˆ¤ìÍ•±˜¹É•ÍÕ±Ğ¹Á…¬¡™¥±°ô‰‰½Ñ ˆ°•áÁ…¹õQÉÕ”°Á…‘äôà¤(€€€€€€€ÑÑ¬¹	ÕÑÑ½¸¡˜°Ñ•áĞô‹BSBûBÇBÃBËBãFF0ƒFBÃFBÿBûBßB÷BÃB÷B÷F/BÔƒBÿBûBßBãFBãBàˆ°½µµ…¹õÍ•±˜¹…•ÁĞ¤¹Á…¬¡…¹¡½Èô‰”ˆ¤((€€€‘•˜µ…Ñ ¡Í•±˜¤€´ø9½¹”è(€€€€€€€Í•±˜¹µ…Ñ¡•Ì°Õ¹µ…Ñ¡•°‘•Ñ…¥±Ì€ôÍ•±˜¹‰Õ¥±‘Ì¹ÅÕ¥­}µ…Ñ¡}½¹™¥œ¡Í•±˜¹Ñ•áĞ¹•Ğ ˆÄ¸Àˆ°€‰•¹ˆ¤¤(€€€€€€€±¥¹•Ì€ômt(€€€€€€€™½È¥¸‘•Ñ…¥±Ìè(€€€€€€€€€€€Œ€ô‘l‰½µÁ½¹•¹Ğ‰t(€€€€€€€€€€€±¥¹•Ì¹…ÁÁ•¹¡˜‹ŠrLí‘l±¥¹”uô€ƒŠH€íl…Ñ•½Éäuôèílµ½‘•°uô€¡í‘lÍ½É”tè¸À•ô¤ˆ¤(€€€€€€€™½È±¥¹”¥¸Õ¹µ…Ñ¡•è(€€€€€€€€€€€±¥¹•Ì¹…ÁÁ•¹¡˜‹Šr\ƒBwBÔƒB÷BÃBçBÓB×B÷Bøèí±¥¹•ôˆ¤(€€€€€€€Í•±˜¹É•ÍÕ±Ğ¹½¹™¥ÕÉ”¡ÍÑ…Ñ”ô‰¹½Éµ…°ˆ¤ìÍ•±˜¹É•ÍÕ±Ğ¹‘•±•Ñ” ˆÄ¸Àˆ°€‰•¹ˆ¤ìÍ•±˜¹É•ÍÕ±Ğ¹¥¹Í•ÉĞ ˆÄ¸Àˆ°€‰q¸ˆ¹©½¥¸¡±¥¹•Ì¤½È€‹BwB×FB×BÏBøƒFBÃFBÿBûBßB÷BÃBËBÃFF0ˆ¤ìÍ•±˜¹É•ÍÕ±Ğ¹½¹™¥ÕÉ”¡ÍÑ…Ñ”ô‰‘¥Í…‰±•ˆ¤((€€€‘•˜…•ÁĞ¡Í•±˜¤€´ø9½¹”è(€€€€€€€¥˜¹½ĞÍ•±˜¹µ…Ñ¡•Ìè(€€€€€€€€€€€Í•±˜¹µ…Ñ  ¤(€€€€€€€¥˜Í•±˜¹µ…Ñ¡•Ìè(€€€€€€€€€€€Í•±˜¹½¹}…•ÁĞ¡Í•±˜¹µ…Ñ¡•Ì¤ìÍ•±˜¹‘•ÍÑÉ½ä ¤(()±…ÍÌM•±±¥…±½œ¡Ñ¬¹Q½Á±•Ù•°¤è(€€€‘•˜}}¥¹¥Ñ}|¡Í•±˜°Á…É•¹Ğ°‰Õ¥±è‘¥Ğ°Í•ÉÙ¥”è	Õ¥±‘M•ÉÙ¥”°½¹}Í…Ù•õ9½¹”¤€´ø9½¹”è(€€€€€€€ÍÕÁ•È ¤¹}}¥¹¥Ñ}|¡Á…É•¹Ğ¤(€€€€€€€Í•±˜¹‰Õ¥±°Í•±˜¹Í•ÉÙ¥”°Í•±˜¹½¹}Í…Ù•€ô‰Õ¥±°Í•ÉÙ¥”°½¹}Í…Ù•(€€€€€€€Í•±˜¹Ñ¥Ñ±”¡˜‹BFBûBÓBÃBÛBÀí‰Õ¥±‘l½‘”uôˆ¤(€€€€€€€Í•±˜¹ÑÉ…¹Í¥•¹Ğ¡Á…É•¹Ğ¤ìÍ•±˜¹É…‰}Í•Ğ ¤ìÍ•±˜¹É•Í¥é…‰±”¡…±Í”°…±Í”¤(€€€€€€€˜€ôÑÑ¬¹É…µ”¡Í•±˜°Á…‘‘¥¹œôÄĞ¤ì˜¹Á…¬ ¤(€€€€€€€ÑÑ¬¹1…‰•°¡˜°Ñ•áĞõ˜‹B‡B×BÇB×FFBûBãBóBûFFF0èíµ½¹•ä¡‰Õ¥±‘l½ÍÑ}Ñ½Ñ…°t¥ôˆ°ÍÑå±”ô‰…É‘Q¥Ñ±”¹Q1…‰•°ˆ¤¹Á…¬¡…¹¡½Èô‰Üˆ¤(€€€€€€€Í•±˜¹Í…±”€ôÑ¬¹MÑÉ¥¹Y…È¡Ù…±Õ”õÍÑÈ¡‰Õ¥±‘l‰Í…±•}ÁÉ¥”‰t½È€À¤¤(€€€€€€€É½Ü€ôÑÑ¬¹É…µ”¡˜¤ìÉ½Ü¹Á…¬¡™¥±°ô‰àˆ°Á…‘äôÄÀ¤(€€€€€€€ÑÑ¬¹1…‰•°¡É½Ü°Ñ•áĞô‹B›B×B÷BÀƒBÿFBûBÓBÃBÛBàèˆ¤¹Á…¬¡Í¥‘”ô‰±•™Ğˆ¤(€€€€€€€ÑÑ¬¹¹ÑÉä¡É½Ü°Ñ•áÑÙ…É¥…‰±”õÍ•±˜¹Í…±”°İ¥‘Ñ ôÈÀ¤¹Á…¬¡Í¥‘”ô‰±•™Ğˆ°Á…‘àôà¤(€€€€€€€ÑÑ¬¹	ÕÑÑ½¸¡˜°Ñ•áĞô‹BBûBÓFBËB×FBÓBãFF0ƒBÿFBûBÓBÃBÛFƒBàƒFBÿBãFBÃFF0ƒFBøƒFBëBïBÃBÓBÀˆ°½µµ…¹õÍ•±˜¹Í…Ù”¤¹Á…¬¡…¹¡½Èô‰”ˆ¤((€€€‘•˜Í…Ù”¡Í•±˜¤€´ø9½¹”è(€€€€€€€ÑÉäè(€€€€€€€€€€€ÁÉ¥”€ôÁ…ÉÍ•}™±½…Ğ¡Í•±˜¹Í…±”¹•Ğ ¤°€‹B›B×B÷BÀƒBÿFBûBÓBÃBÛBàˆ¤(€€€€€€€€€€€ÁÉ½™¥Ğ€ôÁÉ¥”€´™±½…Ğ¡Í•±˜¹‰Õ¥±‘l‰½ÍÑ}Ñ½Ñ…°‰t¤(€€€€€€€€€€€¥˜¹½Ğµ•ÍÍ…•‰½à¹…Í­å•Í¹¼ ‰AMÑ½ÉŒˆ°˜‹B‡BÿBãFBÃFF0ƒBëBûBóBÿBïB×BëFFF;F'BãBÔƒFBøƒFBëBïBÃBÓBÀıq»BFBûBÓBÃBÛBÀèíµ½¹•ä¡ÁÉ¥”¥õq»BFBãBÇF/BïF0èíµ½¹•ä¡ÁÉ½™¥Ğ¥ôˆ°Á…É•¹ĞõÍ•±˜¤èÉ•ÑÕÉ¸(€€€€€€€€€€€Í•±˜¹Í•ÉÙ¥”¹Í•±±}‰Õ¥±¡Í•±˜¹‰Õ¥±‘l‰¥‰t°ÁÉ¥”¤(€€€€€€€€€€€¥˜Í•±˜¹½¹}Í…Ù•èÍ•±˜¹½¹}Í…Ù• ¤(€€€€€€€€€€€Í•±˜¹‘•ÍÑÉ½ä ¤(€€€€€€€•á•ÁĞAMÑ½ÉÉÉ½È…Ì•áŒè(€€€€€€€€€€€µ•ÍÍ…•‰½à¹Í¡½İ•ÉÉ½È ‰AMÑ½ÉŒˆ°ÍÑÈ¡•áŒ¤°Á…É•¹ĞõÍ•±˜¤(()±…ÍÌ	Õ¥±‘Y¥•İ¥…±½œ¡Ñ¬¹Q½Á±•Ù•°¤è(€€€‘•˜}}¥¹¥Ñ}|¡Í•±˜°Á…É•¹Ğ°‰Õ¥±è‘¥Ğ¤€´ø9½¹”è(€€€€€€€ÍÕÁ•È ¤¹}}¥¹¥Ñ}|¡Á…É•¹Ğ¤(€€€€€€€Í•±˜¹Ñ¥Ñ±”¡‰Õ¥±‘l‰½‘”‰t¤(€€€€€€€Í•±˜¹•½µ•ÑÉä ˆàÈÁàÔÈÀˆ¤(€€€€€€€Í•±˜¹ÑÉ…¹Í¥•¹Ğ¡Á…É•¹Ğ¤(€€€€€€€˜€ôÑÑ¬¹É…µ”¡Í•±˜°Á…‘‘¥¹œôÄĞ¤ì˜¹Á…¬¡™¥±°ô‰‰½Ñ ˆ°•áÁ…¹õQÉÕ”¤(€€€€€€€ÑÑ¬¹1…‰•°¡˜°Ñ•áĞõ˜‰í‰Õ¥±‘l½‘”uôƒŠPíMQQUM}1	1L¹•Ğ¡‰Õ¥±‘lÍÑ…ÑÕÌt°‰Õ¥±‘lÍÑ…ÑÕÌt¥ôˆ°ÍÑå±”ô‰Q¥Ñ±”¹Q1…‰•°ˆ¤¹Á…¬¡…¹¡½Èô‰Üˆ¤(€€€€€€€ÑÑ¬¹1…‰•°¡˜°Ñ•áĞõ˜‹BkBïBãB×B÷Fèí‰Õ¥±‘lÕÍÑ½µ•Èt½È€ŸŠPô€€€ƒB{BÿBãFBÃB÷BãBÔèí‰Õ¥±‘l‘•ÍÉ¥ÁÑ¥½¸t½È€ŸŠPôˆ¤¹Á…¬¡…¹¡½Èô‰Üˆ°Á…‘äô À°€à¤¤(€€€€€€€ÑÉ•”€ôÑÑ¬¹QÉ••Ù¥•Ü¡˜°½±Õµ¹Ìô ‰…Ñ•½Éäˆ°€‰µ½‘•°ˆ°€‰ÅÑäˆ°€‰½ÍĞˆ°€‰ÍÕ´ˆ¤°Í¡½Üô‰¡•…‘¥¹Ìˆ¤(€€€€€€€™½È½°°Ñ•áĞ°İ¥‘Ñ ¥¸l ‰…Ñ•½Éäˆ°€‹BkBÃFB×BÏBûFBãF<ˆ°€ÄÜÀ¤°€ ‰µ½‘•°ˆ°€‹BsBûBÓB×BïF0ˆ°€ÌÌÀ¤°€ ‰ÅÑäˆ°€‹BkBûBì·BËBøˆ°€ÜÀ¤°€ ‰½ÍĞˆ°€‹B›B×B÷BÀˆ°€ÄÀÀ¤°€ ‰ÍÕ´ˆ°€‹B‡FBóBóBÀˆ°€ÄÄÀ¥tè(€€€€€€€€€€€ÑÉ•”¹¡•…‘¥¹œ¡½°°Ñ•áĞõÑ•áĞ¤ìÑÉ•”¹½±Õµ¸¡½°°İ¥‘Ñ õİ¥‘Ñ °…¹¡½Èô‰•¹Ñ•Èˆ¥˜½°¥¸ì‰ÅÑäˆ°€‰½ÍĞˆ°€‰ÍÕ´‰ô•±Í”€‰Üˆ¤(€€€€€€€™½È¥Ñ•´¥¸‰Õ¥±‘l‰¥Ñ•µÌ‰tè(€€€€€€€€€€€ÑÉ•”¹¥¹Í•ÉĞ ˆˆ°€‰•¹ˆ°Ù…±Õ•Ìô¡¥Ñ•µl‰…Ñ•½Éå}Í¹…ÁÍ¡½Ğ‰t°¥Ñ•µl‰½µÁ½¹•¹Ñ}¹…µ•}Í¹…ÁÍ¡½Ğ‰t°¥Ñ•µl‰ÅÕ…¹Ñ¥Ñä‰t°µ½¹•ä¡¥Ñ•µl‰Õ¹¥Ñ}½ÍĞ‰t¤°µ½¹•ä¡¥Ñ•µl‰ÅÕ…¹Ñ¥Ñä‰t€¨¥Ñ•µl‰Õ¹¥Ñ}½ÍĞ‰t¤¤¤(€€€€€€€ÑÉ•”¹Á…¬¡™¥±°ô‰‰½Ñ ˆ°•áÁ…¹õQÉÕ”¤(€€€€€€€ÑÑ¬¹1…‰•°¡˜°Ñ•áĞõ˜‹B‡B×BÇB×FFBûBãBóBûFFF0èíµ½¹•ä¡‰Õ¥±‘l½ÍÑ}Ñ½Ñ…°t¥ô€€€ƒBFBûBÓBÃBÛBÀèíµ½¹•ä¡‰Õ¥±‘lÍ…±•}ÁÉ¥”t¥ô€€€ƒBFBãBÇF/BïF0èíµ½¹•ä¡‰Õ¥±‘lÁÉ½™¥Ğt¥ôˆ°ÍÑå±”ô‰…É‘Q¥Ñ±”¹Q1…‰•°ˆ¤¹Á…¬¡…¹¡½Èô‰”ˆ°Á…‘äôÄÀ¤(()‘•˜}Í…™•}±½İ•È¡Ù…±Õ”èÍÑÈ¤€´øÍÑÈè(€€€É•ÑÕÉ¸€¡Ù…±Õ”½È€ˆˆ¤¹±½İ•È ¤¹É•Á±…” ‹FDˆ°€‹BÔˆ¤(
+    def save_backup_settings(self):
+        t=self.backup_time.get().strip()
+        if len(t)!=5 or t[2] != ":": return messagebox.showerror("PcStorc","Ğ’Ñ€ĞµĞ¼Ñ Ğ½ÑƒĞ¶Ğ½Ğ¾ Ğ² Ñ„Ğ¾Ñ€Ğ¼Ğ°Ñ‚Ğµ 21:00")
+        self.db.set_setting("backup_folder",self.backup_folder.get().strip()); self.db.set_setting("backup_time",t); self.refresh_backup()
+
+    def manual_backup(self):
+        self.save_backup_settings()
+        try:p=self.backups.create_backup("manual"); messagebox.showinfo("PcStorc",f"ĞšĞ¾Ğ¿Ğ¸Ñ ÑĞ¾Ğ·Ğ´Ğ°Ğ½Ğ°:\n{p}"); self.refresh_backup()
+        except Exception as e:messagebox.showerror("PcStorc",str(e))
+
+    def restore_backup(self):
+        p=filedialog.askopenfilename(parent=self.root,filetypes=[("PcStorc backup","*.zip")])
+        if not p:return
+        if not messagebox.askyesno("PcStorc","Ğ¢ĞµĞºÑƒÑ‰Ğ°Ñ Ğ±Ğ°Ğ·Ğ° Ğ±ÑƒĞ´ĞµÑ‚ Ğ·Ğ°Ğ¼ĞµĞ½ĞµĞ½Ğ°. ĞŸÑ€Ğ¾Ğ´Ğ¾Ğ»Ğ¶Ğ¸Ñ‚ÑŒ?"):return
+        try:self.backups.restore_backup(p); messagebox.showinfo("PcStorc","Ğ‘Ğ°Ğ·Ğ° Ğ²Ğ¾ÑÑÑ‚Ğ°Ğ½Ğ¾Ğ²Ğ»ĞµĞ½Ğ°. ĞŸĞµÑ€ĞµĞ·Ğ°Ğ¿ÑƒÑÑ‚Ğ¸Ñ‚Ğµ Ğ¿Ñ€Ğ¾Ğ³Ñ€Ğ°Ğ¼Ğ¼Ñƒ."); self.root.destroy()
+        except Exception as e:messagebox.showerror("PcStorc",str(e))
+
+    def install_task(self):
+        if os.name!="nt":return messagebox.showinfo("PcStorc","ĞŸĞ»Ğ°Ğ½Ğ¸Ñ€Ğ¾Ğ²Ñ‰Ğ¸Ğº Ğ´Ğ¾ÑÑ‚ÑƒĞ¿ĞµĞ½ Ñ‚Ğ¾Ğ»ÑŒĞºĞ¾ Ğ² Windows")
+        self.save_backup_settings(); exe=Path(sys.executable).resolve(); time=self.backup_time.get()
+        cmd=["schtasks","/Create","/F","/SC","DAILY","/TN","PcStorc Daily Backup","/TR",f'"{exe}" --backup',"/ST",time]
+        try:subprocess.run(cmd,check=True,capture_output=True,text=True); messagebox.showinfo("PcStorc",f"Ğ•Ğ¶ĞµĞ´Ğ½ĞµĞ²Ğ½Ğ°Ñ ĞºĞ¾Ğ¿Ğ¸Ñ Ğ·Ğ°Ğ¿Ğ»Ğ°Ğ½Ğ¸Ñ€Ğ¾Ğ²Ğ°Ğ½Ğ° Ğ½Ğ° {time}")
+        except Exception as e:messagebox.showerror("PcStorc",f"ĞĞµ ÑƒĞ´Ğ°Ğ»Ğ¾ÑÑŒ ÑĞ¾Ğ·Ğ´Ğ°Ñ‚ÑŒ Ğ·Ğ°Ğ´Ğ°Ñ‡Ñƒ:\n{e}")
+
+    def _daily_check(self):
+        try:
+            if not self.backups.has_daily_backup_today() and self.backup_time.get()==__import__("datetime").datetime.now().strftime("%H:%M"):
+                self.backups.create_backup("daily"); self.refresh_backup()
+        finally:self.root.after(60_000,self._daily_check)
+
+    def on_close(self):
+        try:
+            if self.db.get_setting("backup_on_close","1")=="1": self.backups.create_backup("close")
+        except Exception: pass
+        try:self.db.close()
+        finally:self.root.destroy()
+
+
+class ComponentDialog(tk.Toplevel):
+    def __init__(self,parent):
+        super().__init__(parent); self.title("ĞĞ¾Ğ²Ğ°Ñ Ğ¿Ğ¾Ğ·Ğ¸Ñ†Ğ¸Ñ"); self.transient(parent); self.grab_set(); self.result=None
+        f=ttk.Frame(self,padding=12); f.pack(fill="both",expand=True)
+        self.vars={"category":tk.StringVar(value=DEFAULT_CATEGORIES[0]),"model":tk.StringVar(),"quantity":tk.StringVar(value="0"),"purchase_price":tk.StringVar(value="0"),"supplier":tk.StringVar(),"delivery_days":tk.StringVar(value="1"),"yellow_level":tk.StringVar(value="2"),"red_level":tk.StringVar(value="1")}
+        fields=[("ĞšĞ°Ñ‚ĞµĞ³Ğ¾Ñ€Ğ¸Ñ","category"),("ĞœĞ¾Ğ´ĞµĞ»ÑŒ","model"),("ĞšĞ¾Ğ»Ğ¸Ñ‡ĞµÑÑ‚Ğ²Ğ¾","quantity"),("Ğ¦ĞµĞ½Ğ° Ğ·Ğ°ĞºÑƒĞ¿ĞºĞ¸","purchase_price"),("ĞŸĞ¾ÑÑ‚Ğ°Ğ²Ñ‰Ğ¸Ğº","supplier"),("Ğ”Ğ¾ÑÑ‚Ğ°Ğ²ĞºĞ°, Ğ´Ğ½ĞµĞ¹","delivery_days"),("Ğ–ĞµĞ»Ñ‚Ñ‹Ğ¹ Ğ¿Ğ¾Ñ€Ğ¾Ğ³","yellow_level"),("ĞšÑ€Ğ°ÑĞ½Ñ‹Ğ¹ Ğ¿Ğ¾Ñ€Ğ¾Ğ³","red_level")]
+        for r,(label,key) in enumerate(fields):
+            ttk.Label(f,text=label).grid(row=r,column=0,sticky="w",pady=3)
+            w=ttk.Combobox(f,textvariable=self.vars[key],values=DEFAULT_CATEGORIES,state="readonly",width=40) if key=="category" else ttk.Entry(f,textvariable=self.vars[key],width=43)
+            w.grid(row=r,column=1,padx=8,pady=3)
+        ttk.Button(f,text="Ğ”Ğ¾Ğ±Ğ°Ğ²Ğ¸Ñ‚ÑŒ",command=self.save).grid(row=len(fields),column=1,sticky="e",pady=8)
+    def save(self):
+        try:
+            if not self.vars["model"].get().strip():raise PcStorcError("Ğ’Ğ²ĞµĞ´Ğ¸Ñ‚Ğµ Ğ¼Ğ¾Ğ´ĞµĞ»ÑŒ")
+            self.result={"category":self.vars["category"].get(),"model":self.vars["model"].get(),"quantity":number(self.vars["quantity"].get(),True),"purchase_price":number(self.vars["purchase_price"].get()),"supplier":self.vars["supplier"].get(),"delivery_days":number(self.vars["delivery_days"].get(),True),"yellow_level":number(self.vars["yellow_level"].get(),True),"red_level":number(self.vars["red_level"].get(),True)}; self.destroy()
+        except Exception as e:messagebox.showerror("PcStorc",str(e),parent=self)
+
+
+class BuildDialog(tk.Toplevel):
+    def __init__(self,parent,inventory:InventoryService,builds:BuildService,on_saved):
+        super().__init__(parent); self.title("ĞĞ¾Ğ²Ğ°Ñ ÑĞ±Ğ¾Ñ€ĞºĞ°"); self.geometry("760x560"); self.transient(parent); self.grab_set()
+        self.inventory,self.builds,self.on_saved=inventory,builds,on_saved; self.items=[]; self.components=inventory.list_components()
+        f=ttk.Frame(self,padding=12); f.pack(fill="both",expand=True)
+        top=ttk.Frame(f); top.pack(fill="x"); self.customer=tk.StringVar(); self.sale=tk.StringVar(value="0")
+        ttk.Label(top,text="ĞšĞ»Ğ¸ĞµĞ½Ñ‚:").pack(side="left"); ttk.Entry(top,textvariable=self.customer,width=24).pack(side="left",padx=5); ttk.Label(top,text="Ğ¦ĞµĞ½Ğ° Ğ¿Ñ€Ğ¾Ğ´Ğ°Ğ¶Ğ¸:").pack(side="left",padx=(15,0)); ttk.Entry(top,textvariable=self.sale,width=14).pack(side="left",padx=5)
+        add=ttk.Frame(f); add.pack(fill="x",pady=10); self.choice=tk.StringVar()
+        self.combo=ttk.Combobox(add,textvariable=self.choice,state="readonly",values=[f"{c['category']} â€” {c['model']} (ÑĞ²Ğ¾Ğ±. {c['available']})" for c in self.components],width=65); self.combo.pack(side="left")
+        ttk.Button(add,text="Ğ”Ğ¾Ğ±Ğ°Ğ²Ğ¸Ñ‚ÑŒ",command=self.add).pack(side="left",padx=5)
+        self.list=tk.Listbox(f); self.list.pack(fill="both",expand=True)
+        buttons=ttk.Frame(f); buttons.pack(fill="x",pady=8); ttk.Button(buttons,text="Ğ£Ğ´Ğ°Ğ»Ğ¸Ñ‚ÑŒ ÑÑ‚Ñ€Ğ¾ĞºÑƒ",command=self.remove).pack(side="left"); ttk.Button(buttons,text="Ğ¡Ğ¾Ğ·Ğ´Ğ°Ñ‚ÑŒ Ñ€ĞµĞ·ĞµÑ€Ğ²",command=lambda:self.save("RESERVED")).pack(side="right"); ttk.Button(buttons,text="Ğ¡Ğ¾Ñ…Ñ€Ğ°Ğ½Ğ¸Ñ‚ÑŒ Ñ‡ĞµÑ€Ğ½Ğ¾Ğ²Ğ¸Ğº",command=lambda:self.save("DRAFT")).pack(side="right",padx=5)
+    def add(self):
+        i=self.combo.current()
+        if i<0:return
+        c=self.components[i]; cost=simpledialog.askfloat("Ğ¡ĞµĞ±ĞµÑÑ‚Ğ¾Ğ¸Ğ¼Ğ¾ÑÑ‚ÑŒ",f"Ğ¦ĞµĞ½Ğ° {c['model']}:",initialvalue=c["last_purchase_price"],minvalue=0,parent=self)
+        if cost is None:return
+        self.items.append(BuildItemInput(c["id"],1,cost)); self.list.insert("end",f"{c['category']}: {c['model']} â€” {money(cost)}")
+    def remove(self):
+        s=self.list.curselection()
+        if s:self.items.pop(s[0]); self.list.delete(s[0])
+    def save(self,status):
+        try:self.builds.create_build(self.items,customer=self.customer.get(),sale_price=number(self.sale.get()),status=status); self.on_saved(); self.destroy()
+        except Exception as e:messagebox.showerror("PcStorc",str(e),parent=self)
