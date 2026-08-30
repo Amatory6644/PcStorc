@@ -26,6 +26,30 @@ jobs:
         shell: pwsh
         run: python -m unittest discover -s tests -v
 
+      - name: Smoke test desktop UI startup
+        shell: pwsh
+        run: |
+          @'
+          import tempfile
+          from pathlib import Path
+          import tkinter as tk
+          from pcstorc.database import Database
+          from pcstorc.ui.app_window import MainWindow
+
+          with tempfile.TemporaryDirectory() as td:
+              db = Database(Path(td) / "pcstorc.db")
+              db.set_setting("backup_on_close", "0")
+              db.set_setting("backup_folder", str(Path(td) / "backups"))
+              root = tk.Tk()
+              root.withdraw()
+              app = MainWindow(root, db)
+              root.update()
+              assert len(app.tabs.tabs()) == 4
+              root.destroy()
+              db.close()
+          print("Desktop UI smoke test OK")
+          '@ | python -
+
       - name: Install PyInstaller
         shell: pwsh
         run: pip install -r requirements-dev.txt
@@ -33,6 +57,25 @@ jobs:
       - name: Build PcStorc.exe
         shell: pwsh
         run: pyinstaller --noconfirm --clean PcStorc.spec
+
+      - name: Smoke test built EXE backup mode
+        shell: pwsh
+        run: |
+          $env:LOCALAPPDATA = Join-Path $PWD ".smoke-localappdata"
+          $env:USERPROFILE = Join-Path $PWD ".smoke-user"
+          New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE "Documents") | Out-Null
+          $process = Start-Process -FilePath (Resolve-Path "dist/PcStorc.exe") -ArgumentList "--backup" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "PcStorc.exe --backup failed with exit code $($process.ExitCode)"
+          }
+          if (-not (Test-Path (Join-Path $env:LOCALAPPDATA "PcStorc/pcstorc.db"))) {
+            throw "PcStorc.exe did not create its SQLite database"
+          }
+          $backupDir = Join-Path $env:USERPROFILE "Documents/PcStorc Backups"
+          if (-not (Get-ChildItem -Path $backupDir -Filter "PcStorc_backup_*.zip" -ErrorAction SilentlyContinue)) {
+            throw "PcStorc.exe did not create a backup ZIP"
+          }
 
       - name: Prepare downloadable ZIP files
         shell: pwsh
