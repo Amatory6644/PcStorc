@@ -40,7 +40,7 @@ def run_backup_only() -> int:
 def run_gui() -> int:
     import tkinter as tk
     from tkinter import messagebox
-    from pcstorc.ui.main_window import MainWindow
+    from pcstorc.ui.app_window import MainWindow
 
     db = Database()
     root = tk.Tk()
